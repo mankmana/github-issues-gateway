@@ -1,4 +1,5 @@
 import hashlib
+import time
 import hmac
 import json
 from fastapi.responses import JSONResponse, Response
@@ -36,14 +37,57 @@ def health_check():
 
 
 @app.get("/issues")
-async def list_issues():
+async def list_issues(
+    state: str = "open",
+    labels: str | None = None,
+    page: int = 1,
+    per_page: int = 30,
+):
+    if state not in {"open", "closed", "all"}:
+        raise HTTPException(
+            status_code=400,
+            detail="state must be open, closed, or all",
+        )
+
+    if page < 1 or per_page < 1 or per_page > 100:
+        raise HTTPException(
+            status_code=400,
+            detail="page must be positive and per_page must be between 1 and 100",
+        )
+
     try:
-        return await github_client.list_issues()
+        issues, github_headers = await github_client.list_issues(
+            state=state,
+            labels=labels,
+            page=page,
+            per_page=per_page,
+        )
+
     except httpx.HTTPStatusError as error:
+        if (
+            error.response.status_code == 403
+            and error.response.headers.get("X-RateLimit-Remaining") == "0"
+        ):
+            raise HTTPException(
+                status_code=429,
+                detail="GitHub API rate limit exceeded",
+                headers={"Retry-After": "60"},
+            )
+
         raise HTTPException(
             status_code=error.response.status_code,
             detail="GitHub request failed",
         )
+
+    response_headers = {}
+
+    if "link" in github_headers:
+        response_headers["Link"] = github_headers["link"]
+
+    return JSONResponse(
+        content=issues,
+        headers=response_headers,
+    )
 
 
 @app.get("/issues/{issue_number}")
@@ -67,13 +111,24 @@ async def get_issue(
         headers={"ETag": etag},
     )
 
-@app.post("/issues")
-async def create_issue(issue: IssueCreate):
+@app.post("/issues", status_code=201)
+async def create_issue(
+    issue: IssueCreate,
+    response: Response,
+):
     try:
-        return await github_client.create_issue(
+        created_issue = await github_client.create_issue(
             title=issue.title,
             body=issue.body,
+            labels=issue.labels,
         )
+
+        response.headers["Location"] = (
+            f"/issues/{created_issue['number']}"
+        )
+
+        return created_issue
+
     except httpx.HTTPStatusError as error:
         raise HTTPException(
             status_code=error.response.status_code,
@@ -102,7 +157,7 @@ async def list_comments(issue_number: int):
     return await github_client.list_comments(issue_number)
 
 
-@app.post("/issues/{issue_number}/comments")
+@app.post("/issues/{issue_number}/comments", status_code=201)
 async def create_comment(issue_number: int, comment: CommentCreate):
     return await github_client.create_comment(
         issue_number=issue_number,

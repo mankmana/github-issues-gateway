@@ -1,6 +1,8 @@
 import httpx
 
+
 from config import settings
+
 
 
 class GitHubClient:
@@ -39,15 +41,30 @@ class GitHubClient:
             response.raise_for_status()
             return response.json()
 
-    async def list_issues(self):
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self.base_url}/issues",
-                headers=self.headers,
-            )
-            response.raise_for_status()
-            return response.json()
+   
+    async def list_issues(self,state: str = "open",labels: str | None = None,page: int = 1,per_page: int = 30,):
+    	params = {
+        	"state": state,
+        	"page": page,
+        	"per_page": per_page,
+    	}
 
+    	if labels:
+        	params["labels"] = labels
+
+    	async with httpx.AsyncClient() as client:
+        	response = await client.get(
+            	f"{self.base_url}/issues",
+            	headers=self.headers,
+            	params=params,
+        	)
+
+        	response.raise_for_status()
+
+        	return response.json(), response.headers
+
+
+ 
     async def update_issue(
         self,
         issue_number: int,
