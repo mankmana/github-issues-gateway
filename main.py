@@ -110,51 +110,64 @@ async def create_comment(issue_number: int, comment: CommentCreate):
     )
 
 
-@app.post("/webhooks/github")
+
+@app.post("/webhook", status_code=204)
+@app.post("/webhooks/github", status_code=204)
 async def github_webhook(
     request: Request,
     x_hub_signature_256: str | None = Header(default=None),
 ):
-    payload = await request.body()
-
-    if not x_hub_signature_256:
-        raise HTTPException(
-            status_code=401,
-            detail="Missing GitHub signature",
-        )
+    raw_body = await request.body()
 
     expected_signature = (
         "sha256="
         + hmac.new(
             settings.webhook_secret.encode(),
-            payload,
+            raw_body,
             hashlib.sha256,
         ).hexdigest()
     )
 
-    if not hmac.compare_digest(
-        expected_signature,
+    if not x_hub_signature_256 or not hmac.compare_digest(
         x_hub_signature_256,
+        expected_signature,
     ):
         raise HTTPException(
             status_code=401,
-            detail="Invalid GitHub signature",
+            detail="Invalid webhook signature",
         )
 
-    event = await request.json()
-    event_name = request.headers.get("X-GitHub-Event", "unknown")
+    event_name = request.headers.get(
+        "X-GitHub-Event",
+        "unknown",
+    )
+
+    if event_name not in {"issues", "issue_comment", "ping"}:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported GitHub event: {event_name}",
+        )
+
+    try:
+        event = json.loads(raw_body)
+    except json.JSONDecodeError:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid JSON payload",
+        )
+
+    delivery_id = request.headers.get(
+        "X-GitHub-Delivery"
+    ) or hashlib.sha256(raw_body).hexdigest()
 
     save_event(
+        delivery_id=delivery_id,
         event_name=event_name,
         action=event.get("action"),
         payload=event,
     )
 
-    return {
-        "received": True,
-        "event": event.get("action"),
-    }
-
+    return Response(status_code=204)
 
 @app.get("/webhook-events")
 def list_webhook_events():
