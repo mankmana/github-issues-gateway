@@ -9,6 +9,12 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: test-token
+      GITHUB_OWNER: test-owner
+      GITHUB_REPO: test-repo
+      WEBHOOK_SECRET: test-secret
+      PORT: "8000"
 
     steps:
       - name: Check out code
