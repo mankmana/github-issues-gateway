@@ -1,6 +1,7 @@
 import hashlib
 import hmac
-
+import json
+from fastapi.responses import JSONResponse, Response
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel
@@ -46,15 +47,25 @@ async def list_issues():
 
 
 @app.get("/issues/{issue_number}")
-async def get_issue(issue_number: int):
-    try:
-        return await github_client.get_issue(issue_number)
-    except httpx.HTTPStatusError as error:
-        raise HTTPException(
-            status_code=error.response.status_code,
-            detail="GitHub request failed",
+async def get_issue(
+    issue_number: int,
+    if_none_match: str | None = Header(default=None),
+):
+    issue = await github_client.get_issue(issue_number)
+
+    content = json.dumps(issue, sort_keys=True).encode()
+    etag = f'"{hashlib.sha256(content).hexdigest()}"'
+
+    if if_none_match == etag:
+        return Response(
+            status_code=304,
+            headers={"ETag": etag},
         )
 
+    return JSONResponse(
+        content=issue,
+        headers={"ETag": etag},
+    )
 
 @app.post("/issues")
 async def create_issue(issue: IssueCreate):
