@@ -1,32 +1,35 @@
+# Author: Manali Mankad
+# GitHub Issues Gateway service implementation
+
 # GitHub Issues Gateway
 
-A FastAPI service that sits between a client application and GitHub Issues. The service exposes a small REST API for managing issues and comments, receives GitHub webhook events, verifies webhook signatures, and stores received events in SQLite.
+A FastAPI service that wraps the GitHub Issues REST API for one repository. It supports issue management, comments, secure webhooks, SQLite event storage, Docker, OpenAPI documentation, automated tests, and ETag caching.
 
 ## Architecture
 
 ```text
 Client → FastAPI → GitHub REST API
                  ↑
-GitHub webhook → ngrok (development tunnel) → FastAPI → SQLite
+GitHub webhook → ngrok → FastAPI → SQLite
 ```
 
 ## Features
 
 - Health check endpoint
-- List and retrieve GitHub issues
-- Create, update, close, and reopen issues
+- List, retrieve, create, update, close, and reopen issues
 - List and create issue comments
-- GitHub webhook endpoint
-- HMAC SHA-256 webhook signature verification
-- SQLite storage for accepted webhook events
-- Automatic interactive API documentation through FastAPI
-- Unit tests with pytest
+- Secure GitHub webhooks using HMAC SHA-256
+- Support for `issues`, `issue_comment`, and `ping` events
+- Duplicate webhook protection using GitHub delivery IDs
+- SQLite storage for webhook events
+- Pagination and rate-limit handling
+- ETag caching for issue responses
+- OpenAPI documentation
+- Automated unit and mocked client tests
+- GitHub Actions CI
 - Docker support
-- OpenAPI specification export
 
 ## Repository
-
-GitHub repository:
 
 ```text
 https://github.com/mankmana/github-issues-gateway
@@ -36,14 +39,18 @@ https://github.com/mankmana/github-issues-gateway
 
 - Python 3.10 or newer
 - Git
-- Docker (optional, for containerized execution)
-- A GitHub fine-grained personal access token
+- Docker, optional
+- GitHub fine-grained personal access token
+- ngrok, for local webhook testing
 
-The token must be restricted to this repository and have **Issues: Read and write** permission.
+The GitHub token should be restricted to this repository with:
+
+- Issues: Read and write
+- Metadata: Read-only
 
 ## Configuration
 
-Create a file named `.env` in the project root:
+Create a `.env` file in the project root:
 
 ```env
 GITHUB_TOKEN=your_github_token
@@ -53,18 +60,18 @@ WEBHOOK_SECRET=your_webhook_secret
 PORT=8000
 ```
 
-Never commit `.env` or share its contents. The file is excluded through `.gitignore`.
+Never commit or share `.env`. It is excluded through `.gitignore`.
 
 ## Local Setup
 
-Clone the repository and enter the project directory:
+Clone the repository:
 
 ```bash
 git clone https://github.com/mankmana/github-issues-gateway.git
 cd github-issues-gateway
 ```
 
-Create and activate a virtual environment:
+Create and activate the virtual environment:
 
 ```bash
 python3 -m venv .venv
@@ -74,21 +81,15 @@ source .venv/bin/activate
 Install dependencies:
 
 ```bash
-pip install -r requirements.txt
-```
-
-If dependencies need to be refreshed during development:
-
-```bash
-pip freeze > requirements.txt
+python -m pip install -r requirements.txt
 ```
 
 ## Run the Application
 
-Start the development server:
+Start FastAPI:
 
 ```bash
-uvicorn main:app --reload
+uvicorn main:app --reload --port 8000
 ```
 
 The service runs at:
@@ -97,86 +98,213 @@ The service runs at:
 http://127.0.0.1:8000
 ```
 
-Interactive API documentation is available at:
+Interactive documentation:
 
 ```text
 http://127.0.0.1:8000/docs
+```
+
+Health check:
+
+```bash
+curl http://127.0.0.1:8000/healthz
+```
+
+Expected response:
+
+```json
+{"status":"ok"}
 ```
 
 ## API Endpoints
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/healthz` | Confirm that the service is running |
+| GET | `/healthz` | Check service status |
 | GET | `/issues` | List repository issues |
 | GET | `/issues/{issue_number}` | Retrieve one issue |
 | POST | `/issues` | Create an issue |
 | PATCH | `/issues/{issue_number}` | Update, close, or reopen an issue |
-| GET | `/issues/{issue_number}/comments` | List comments for an issue |
-| POST | `/issues/{issue_number}/comments` | Add a comment to an issue |
-| POST | `/webhooks/github` | Receive and verify GitHub webhook events |
+| GET | `/issues/{issue_number}/comments` | List comments |
+| POST | `/issues/{issue_number}/comments` | Create a comment |
+| POST | `/webhook` | Receive GitHub webhooks |
+| POST | `/webhooks/github` | Backward-compatible webhook route |
 | GET | `/webhook-events` | View stored webhook events |
+
+## Issue Examples
+
+### List Issues
+
+```bash
+curl -i \
+  "http://127.0.0.1:8000/issues?state=open&page=1&per_page=30"
+```
+
+Supported query parameters:
+
+- `state`: `open`, `closed`, or `all`
+- `labels`: comma-separated labels
+- `page`: page number
+- `per_page`: number of results from 1 to 100
+
+GitHub pagination information is forwarded through the `Link` response header.
+
+### Get an Issue
+
+```bash
+curl -i http://127.0.0.1:8000/issues/1
+```
+
+The response includes an `ETag` header. To check whether the issue changed:
+
+```bash
+curl -i \
+  -H 'If-None-Match: "PASTE_ETAG_HERE"' \
+  http://127.0.0.1:8000/issues/1
+```
+
+If the issue has not changed, the service returns:
+
+```text
+HTTP/1.1 304 Not Modified
+```
 
 ### Create an Issue
 
-```json
-{
-  "title": "Example issue",
-  "body": "Created through the GitHub Issues Gateway."
-}
+```bash
+curl -i -X POST http://127.0.0.1:8000/issues \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Example issue",
+    "body": "Created through the GitHub Issues Gateway."
+  }'
 ```
+
+A successful request returns `201 Created` and a `Location` header.
 
 ### Update or Close an Issue
 
-```json
-{
-  "state": "closed"
-}
+```bash
+curl -i -X PATCH http://127.0.0.1:8000/issues/1 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Updated issue",
+    "body": "Updated issue description",
+    "state": "closed"
+  }'
 ```
 
 Use `"state": "open"` to reopen an issue.
 
-### Add a Comment
+### List Comments
 
-```json
-{
-  "body": "This comment was added through the gateway."
-}
+```bash
+curl -i http://127.0.0.1:8000/issues/1/comments
 ```
+
+### Create a Comment
+
+```bash
+curl -i -X POST http://127.0.0.1:8000/issues/1/comments \
+  -H "Content-Type: application/json" \
+  -d '{
+    "body": "This comment was added through the gateway."
+  }'
+```
+
+A successful request returns `201 Created`.
 
 ## Webhooks
 
-GitHub cannot reach a service running only at `127.0.0.1`. During development, ngrok can provide a temporary public URL:
+GitHub cannot reach a service running only at `127.0.0.1`. Start ngrok:
 
 ```bash
 ngrok http 8000
 ```
 
-Configure the GitHub webhook with:
+Configure the GitHub webhook using:
 
 ```text
-https://YOUR_NGROK_URL/webhooks/github
+https://YOUR_NGROK_URL/webhook
 ```
 
-Use:
+The existing `/webhooks/github` path is also supported.
+
+Use these webhook settings:
 
 - Content type: `application/json`
 - Secret: the same value as `WEBHOOK_SECRET`
-- Event: `Issues`
+- Events: Issues and Issue comments
 
-The application calculates an HMAC SHA-256 signature from the raw request body and compares it with GitHub's `X-Hub-Signature-256` header. Requests with missing or invalid signatures are rejected.
+Supported events:
 
-Accepted events are stored in `events.db` in the `webhook_events` table.
+- `issues`
+- `issue_comment`
+- `ping`
+
+The service:
+
+1. Reads the raw request body.
+2. Calculates an HMAC SHA-256 signature.
+3. Compares it with `X-Hub-Signature-256`.
+4. Reads GitHub’s `X-GitHub-Delivery` ID.
+5. Stores the event in SQLite.
+6. Ignores repeated delivery IDs.
+7. Returns `204 No Content`.
+
+Invalid signatures return `401 Unauthorized`.
+
+View stored events:
+
+```bash
+curl -i http://127.0.0.1:8000/webhook-events
+```
+
+## Pagination and Rate Limits
+
+The issue-list endpoint supports page and page-size parameters:
+
+```bash
+curl -i \
+  "http://127.0.0.1:8000/issues?page=1&per_page=2"
+```
+
+The `per_page` value must be between 1 and 100.
+
+If GitHub reports that its rate limit has been exhausted, the service returns `429 Too Many Requests`.
 
 ## Testing
 
-Run the automated tests from the project root:
+Run all tests from the project root:
 
 ```bash
 python -m pytest
 ```
 
-The tests cover the health endpoint and rejection of webhooks without a signature.
+Run coverage:
+
+```bash
+python -m pytest --cov=. --cov-report=term-missing
+```
+
+The test suite covers:
+
+- Health checks
+- Webhook signature validation
+- Invalid webhook signatures
+- Unsupported webhook events
+- `issue_comment` events
+- Pagination validation
+- SQLite event storage
+- Duplicate delivery protection
+- Mocked GitHub client methods
+
+Latest local result:
+
+```text
+10 passed
+86% coverage
+```
 
 ## OpenAPI
 
@@ -186,10 +314,27 @@ FastAPI serves the live OpenAPI document at:
 http://127.0.0.1:8000/openapi.json
 ```
 
-The repository also includes the exported OpenAPI 3.1 YAML specification:
+The repository also includes:
 
 ```text
 openapi.yaml
+```
+
+## GitHub Actions
+
+GitHub Actions automatically runs the tests when code is pushed to `main` or a pull request is opened.
+
+The workflow:
+
+1. Checks out the repository.
+2. Installs Python.
+3. Installs dependencies.
+4. Runs pytest.
+
+Workflow file:
+
+```text
+.github/workflows/tests.yml
 ```
 
 ## Docker
@@ -209,7 +354,7 @@ sudo docker run --rm \
   github-issues-gateway
 ```
 
-For local SQLite persistence when using Docker, mount the database file:
+For local SQLite persistence, mount the database file:
 
 ```bash
 sudo docker run --rm \
@@ -224,29 +369,41 @@ sudo docker run --rm \
 
 ```text
 .
-├── main.py              # FastAPI application and routes
-├── config.py            # Environment-based configuration
-├── github_client.py     # GitHub REST API client
-├── event_store.py       # SQLite event storage
-├── events.db            # Local webhook event database
+├── main.py
+├── config.py
+├── github_client.py
+├── event_store.py
+├── events.db
 ├── tests/
-│   └── test_main.py     # Automated tests
+│   ├── test_main.py
+│   ├── test_event_store.py
+│   └── test_github_client.py
 ├── Dockerfile
 ├── .dockerignore
 ├── .gitignore
 ├── openapi.yaml
+├── DESIGN.md
 ├── requirements.txt
-└── .env                 # Local secrets; never commit
+├── README.md
+└── .env
 ```
+
+The `.env` file and local database should not be committed if they contain private data.
 
 ## Security Notes
 
-- Keep GitHub tokens and webhook secrets out of source control.
-- Revoke any token that is accidentally exposed.
-- Use a restricted fine-grained token rather than a broad personal token.
+- Never commit GitHub tokens or webhook secrets.
+- Revoke tokens that are accidentally exposed.
+- Use fine-grained tokens with minimum permissions.
 - Use HTTPS for public webhook delivery.
+- Do not log secrets or raw webhook signatures.
 - The ngrok URL is temporary and intended for development only.
 
-## Known Improvements
+## Design Note
 
-For a production-ready version, add pagination support, clearer GitHub rate-limit handling, persistent duplicate-event protection, structured logging, and broader unit and integration test coverage.
+Additional design decisions are documented in:
+
+```text
+DESIGN.md
+```
+

@@ -1,3 +1,5 @@
+# Author: Manali Mankad
+# GitHub Issues Gateway service implementation
 openapi: 3.1.0
 info:
   title: GitHub Issues Gateway

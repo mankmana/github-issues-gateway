@@ -1,3 +1,5 @@
+# Author: Manali Mankad
+# GitHub Issues Gateway service implementation
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 

@@ -1,3 +1,5 @@
+# Author: Manali Mankad
+# GitHub Issues Gateway service implementation
 import asyncio
 
 import github_client
